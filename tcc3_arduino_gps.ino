@@ -5,6 +5,8 @@
 #include <ThingSpeak.h>
 #include <cmath>
 #define M_PI 3.14159265358979323846
+#include "BatteryMonitor.h"
+
 GSM gsmAccess;
 GPRS gprs;
 GSMClient client;
@@ -31,6 +33,9 @@ const long gpsInterval = 500;      // Intervalo para leitura de GPS
 unsigned long lastSearchTime = 0;  // Última vez que tentamos encontrar a localização
 const long searchInterval = 1000;  // Intervalo para encontrar a menor distância
 
+//********BATERIA*******
+BatteryMonitor batteryMonitor(330000, 1000000, 4.2, 3.5, 2.1);
+//********BATERIA*******
 
 
 void setupGSM() {
@@ -59,6 +64,7 @@ float readTSData(int field) {
 }
 
 void writeTSData(float data1, float data2) {
+  int batteryStatus = batteryMonitor.updateBatteryStatus();
   Serial.println("Enviando dados para o ThingSpeak");
   
   // Envia o dado para o field1
@@ -66,6 +72,25 @@ void writeTSData(float data1, float data2) {
   
   // Envia o dado para o field2
   ThingSpeak.setField(2, data2);
+
+  // Enviando bateria para field3
+  ThingSpeak.setField(3, batteryStatus);
+  
+  // Escreve os dados para o canal
+  int response = ThingSpeak.writeFields(2293050, "5VLHEQBMZEFPHP0G");
+  
+  if(response == 200) {
+    Serial.println("Dados enviados com sucesso!");
+  } else {
+    Serial.println("Falha ao enviar os dados. Código de erro: " + String(response));
+  }
+}
+
+void writeTSDataTest() {
+  int batteryStatus = batteryMonitor.updateBatteryStatus();
+  Serial.println("Enviando bateria para o ThingSpeak");
+  
+ThingSpeak.setField(3, batteryStatus);
   
   // Escreve os dados para o canal
   int response = ThingSpeak.writeFields(2293050, "5VLHEQBMZEFPHP0G");
@@ -203,6 +228,7 @@ void searchLoc() {
 
 
 void sendData() {
+  
   searchLoc();
   
   interval = readTSData(1);
@@ -216,25 +242,25 @@ void setup() {
   gpsSerial.begin(GPS_Serial_Baud);
   pinMode(ledPin, OUTPUT);
   setupGSM();
+  batteryMonitor.begin(); 
   startMillis = millis();  //initial start time
 }
 
 
 void loop() {
+  
   if (isGSMConnected()) {
 
   currentMillis = millis();
-
-
   if (currentMillis - startMillis >= interval) {
     // setupGSM(); // Configura o GSM
     Serial.println(startMillis);
     // Verifica se a conexão GSM foi estabelecida
     if (isGSMConnected()) {
      
-     
+     writeTSData(-26.97244052040394, -48.63424548179478);
 
-     sendData();
+    //  sendData();
     //  disconnectGSM();
     } else {
       Serial.println("Erro: Timeout de conexão GSM");
