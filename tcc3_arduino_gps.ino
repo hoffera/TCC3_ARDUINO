@@ -1,6 +1,5 @@
 #define GPS_Serial_Baud 9600
 #include <MKRGSM.h>
-#include <TinyGPS.h>
 #include <ArduinoJson.h>
 #include <ThingSpeak.h>
 #include <cmath>
@@ -10,7 +9,7 @@
 GSM gsmAccess;
 GPRS gprs;
 GSMClient client;
-HardwareSerial& gpsSerial = Serial1;
+HardwareSerial& gpsSerial = Serial2;
 const char apn[] = "kore.br";
 const char gsmPin[] = "3636";
 const char GPRS_LOGIN[] = "kore";
@@ -18,257 +17,226 @@ const char GPRS_PASSWORD[] = "kore";
 const char* apiKey = "5VLHEQBMZEFPHP0G";
 const char* server = "api.thingspeak.com";
 const int port = 80;
-TinyGPS gps;
 
-float flat, flon, flat2, flon2;
+float flat, flon;
 const float MAX_DISTANCE = 1.0e6;  // Valor alto para distância "infinita"
-float minDistance = MAX_DISTANCE;  // Variável para armazenar a menor distância
 const int ledPin = 6;
 unsigned long startMillis;  //some global variables available anywhere in the program
 unsigned long currentMillis;
 unsigned long previousMillis = 0;  // Para armazenar o último tempo que a função 'send()' foi chamada
 long interval = 10000;             // Intervalo de 10 segundos
-unsigned long lastGPSTime = 0;     // Última vez que tentamos ler o GPS
-const long gpsInterval = 500;      // Intervalo para leitura de GPS
-unsigned long lastSearchTime = 0;  // Última vez que tentamos encontrar a localização
-const long searchInterval = 1000;  // Intervalo para encontrar a menor distância
+bool validGPS = false;
+//*LIB GPS***
+#define FIELD_MAX 20
+#define HIGH_QUALITY_TIME 5000  // 5 segundos para gpsQuality > 1
+#define LOW_QUALITY_TIME 1000   // 1 segundo para gpsQuality > 0
 
-//********BATERIA*******
+void ProcessNMEALine(char* s) {
+  char* field[FIELD_MAX];
+  int f;
+  double lat, lon;
+  char lat_hemi, lon_hemi;
+
+  if (s[0] != '$')
+    return;
+
+  f = 0;
+  while (1) {
+    field[f++] = s;
+    while ((s != 0) && (*s != ',') && (*s != '\0') && (*s != 0x0D) && (*s != 0x0A))
+      s++;
+
+    if ((s == 0) || (*s == '\0') || (*s == 0x0D) || (*s == 0x0A) || (f == (FIELD_MAX - 1))) {
+      *s = 0;
+      field[f] = NULL;
+      break;
+    }
+    *s++ = 0;
+  }
+
+
+  if (strncmp(field[0], "$G", 2) == 0) {
+    if (((strncmp(&field[0][3], "GGA", 3) == 0) ||   // GPS (EUA)
+         (strncmp(&field[0][1], "LGGA", 4) == 0) ||  // GLONASS (Rússia)
+         (strncmp(&field[0][1], "AGGA", 4) == 0) ||  // Galileo (União Europeia)
+         (strncmp(&field[0][1], "DGGA", 4) == 0) ||  // BeiDou (China)
+         (strncmp(&field[0][1], "ZGGA", 4) == 0))    // QZSS (Japão)
+        && (f > 14)) {
+
+      int gpsQuality = atoi(field[6]);
+      Serial.print("Qualidade do GPS: ");
+      Serial.println(gpsQuality);
+
+      if (gpsQuality > 1 && gpsQuality < 5) {
+        Serial.print("validgps:");
+        Serial.println(validGPS);
+        validGPS = true;
+        Serial.print("validgps:");
+        Serial.println(validGPS);
+
+        // Latitude e hemisfério
+        lat = atof(field[2]);
+        lat_hemi = field[3][0];
+
+        // Longitude e hemisfério
+        lon = atof(field[4]);
+        lon_hemi = field[5][0];
+
+        // Conversão de latitude para graus decimais
+        int lat_deg = (int)lat / 100;
+        double lat_min = lat - (lat_deg * 100);
+        lat = (double)lat_deg + (lat_min / 60.0);
+        if (lat_hemi == 'S') lat = -lat;
+
+        // Conversão de longitude para graus decimais
+        int lon_deg = (int)lon / 100;
+        double lon_min = lon - (lon_deg * 100);
+        lon = (double)lon_deg + (lon_min / 60.0);
+        if (lon_hemi == 'W') lon = -lon;
+
+        // Atualiza as variáveis globais
+        flat = lat;
+        flon = lon;
+
+        // Exibe os resultados
+        Serial.print("Latitude: ");
+        Serial.print(lat, 6);
+        Serial.print(", Longitude: ");
+        Serial.println(lon, 6);
+      }
+    }
+  }
+}
+
+#define LINEMAX 200  // Máximo comprimento da linha permitido
+
+void ProcessStream(uint8_t* Buffer, int Size) {
+  static char rx_buffer[LINEMAX + 1];  // Buffer local para armazenar a linha
+  static int rx_index = 0;
+
+  while (Size--) {  // Processa os dados disponíveis
+    char rx = (char)*Buffer++;
+
+    if ((rx == '\r') || (rx == '\n')) {  // Verifica se é fim de linha
+      if (rx_index != 0) {               // A linha tem conteúdo
+        rx_buffer[rx_index] = 0;         // Adiciona terminador NUL
+        ProcessNMEALine(rx_buffer);
+        rx_index = 0;  // Reinicia o ponteiro de conteúdo
+      }
+    } else {
+      if ((rx == '$') || (rx_index == LINEMAX))  // Se houver ressincronização ou estouro
+        rx_index = 0;
+
+      rx_buffer[rx_index++] = rx;  // Copia para o buffer e incrementa
+    }
+  }
+}
+
+//***BATERIA**
 BatteryMonitor batteryMonitor(330000, 1000000, 4.2, 3.5, 2.1);
-//********BATERIA*******
+//***BATERIA**
 
+void setup() {
+  Serial.begin(9600);
+  setupGSM();
+  Serial1.begin(38400);  // Inicia a comunicação serial com o módulo GPS a 38400 bps
+  batteryMonitor.begin();
+  startMillis = millis();  // Tempo inicial
+}
 
 void setupGSM() {
-  Serial.print(".");
-  Serial.print(".");
-  Serial.println(".");
+  Serial.println("Tentando conectar ao GSM...");
   bool connected = false;
   while (!connected) {
     if ((gsmAccess.begin(gsmPin) == GSM_READY) && (gprs.attachGPRS(apn, GPRS_LOGIN, GPRS_PASSWORD) == GPRS_READY)) {
       connected = true;
-      Serial.println("connected");
+      Serial.println("GSM conectado.");
       ThingSpeak.begin(client);
+
     } else {
-      Serial.println("Not connected");
+      Serial.println("Falha na conexão GSM.");
       delay(1000);
     }
   }
-  delay(1000);
 }
 
 float readTSData(int field) {
   float data;
-  Serial.println("Recebendo atualizacao do app");
+  Serial.println("Recebendo atualização do app...");
   data = ThingSpeak.readFloatField(2677228, field, "DI4XDFM9FPB5D3CE");
   return data;
 }
 
 void writeTSData(float data1, float data2) {
   int batteryStatus = batteryMonitor.updateBatteryStatus();
-  Serial.println("Enviando dados para o ThingSpeak");
-  
-  // Envia o dado para o field1
+  Serial.println("Enviando dados para o ThingSpeak...");
+
+  // Envia os dados
   ThingSpeak.setField(1, data1);
-  
-  // Envia o dado para o field2
   ThingSpeak.setField(2, data2);
-
-  // Enviando bateria para field3
   ThingSpeak.setField(3, batteryStatus);
-  
-  // Escreve os dados para o canal
-  int response = ThingSpeak.writeFields(2293050, "5VLHEQBMZEFPHP0G");
-  
-  if(response == 200) {
+
+  int response = ThingSpeak.writeFields(2293050, apiKey);
+  if (response == 200) {
     Serial.println("Dados enviados com sucesso!");
   } else {
-    Serial.println("Falha ao enviar os dados. Código de erro: " + String(response));
+    Serial.println("Erro ao enviar dados. Código: " + String(response));
   }
-}
-
-void writeTSDataTest() {
-  int batteryStatus = batteryMonitor.updateBatteryStatus();
-  Serial.println("Enviando bateria para o ThingSpeak");
-  
-ThingSpeak.setField(3, batteryStatus);
-  
-  // Escreve os dados para o canal
-  int response = ThingSpeak.writeFields(2293050, "5VLHEQBMZEFPHP0G");
-  
-  if(response == 200) {
-    Serial.println("Dados enviados com sucesso!");
-  } else {
-    Serial.println("Falha ao enviar os dados. Código de erro: " + String(response));
-  }
-}
-
-
-void sendDataToThingSpeak(float latitude, float longitude, float distance) {
-  String data = "field1=" + String(longitude, 6) + "&field2=" + String(latitude, 6) + "&field3=" + String(distance, 6);
-
-  if (client.connect(server, port)) {
-    client.print("POST /update HTTP/1.1\r\n");
-    client.print("Host: api.thingspeak.com\r\n");
-    client.print("Connection: close\r\n");
-    client.print("X-THINGSPEAKAPIKEY: " + String(apiKey) + "\r\n");
-    client.print("Content-Type: application/x-www-form-urlencoded\r\n");
-    client.print("Content-Length: ");
-    client.print(data.length());
-    client.print("\r\n\r\n");
-    client.print(data);
-
-    Serial.println("Enviando dados para o ThingSpeak...");
-
-    delay(1000);
-
-    while (client.available()) {
-      char c = client.read();
-      Serial.print(c);
-    }
-
-    client.stop();
-    Serial.println("\nDados enviados com sucesso para o ThingSpeak.");
-  } else {
-    Serial.println("Falha na conexão com o ThingSpeak.");
-  }
-}
-
-float degreesToRadians(float degrees) {
-  return degrees * (M_PI / 180.0);
-}
-
-float distanceBetweenEarthCoordinates(float lat1, float lon1, float lat2, float lon2) {
-  long earthRadiusMeters = 6371000;
-  float dLat = degreesToRadians(lat2 - lat1);
-  float dLon = degreesToRadians(lon2 - lon1);
-  lat1 = degreesToRadians(lat1);
-  lat2 = degreesToRadians(lat2);
-  float a = sin(dLat / 2) * sin(dLat / 2) + sin(dLon / 2) * sin(dLon / 2) * cos(lat1) * cos(lat2);
-  float c = 2 * atan2(sqrt(a), sqrt(1 - a));
-  return earthRadiusMeters * c;
 }
 
 bool isGSMConnected() {
   return gsmAccess.status() == GSM_READY;
 }
-void disconnectGSM() {
-  // Termina a conexão GSM
-  gsmAccess.shutdown();
-  Serial.println("Conexão GSM terminada");
 
+void disconnectGSM() {
+  gsmAccess.shutdown();
+  Serial.println("Conexão GSM terminada.");
   if (gprs.detachGPRS() == GPRS_READY) {
-    Serial.println("GPRS desconectado");
+    Serial.println("GPRS desconectado.");
   } else {
-    Serial.println("Falha ao desconectar o GPRS");
+    Serial.println("Falha ao desconectar GPRS.");
   }
 }
 
+void sendData() {
 
 
-
-
-
-void searchLoc() {
-  digitalWrite(ledPin, HIGH);
-
-  bool newData = false;
-  float sumLat = 0.0, sumLon = 0.0;
-  int count = 0;
-  float minLat = 0.0, minLon = 0.0;
-
-  // Armazena o tempo inicial da pesquisa
-  unsigned long startTime = millis();
-
-  Serial.println("Iniciando coleta de dados GPS");
-
-  while (millis() - startTime < 5000) {
-    while (gpsSerial.available()) {
-      char c = gpsSerial.read();
-      if (gps.encode(c)) {
-        unsigned long age;
-        float lat, lon;
-        gps.f_get_position(&lat, &lon, &age);
-
-        if (lat != TinyGPS::GPS_INVALID_F_ANGLE && lon != TinyGPS::GPS_INVALID_F_ANGLE) {
-          sumLat += lat;
-          sumLon += lon;
-          count++;
-
-          Serial.print("LAT= ");
-          Serial.print(lat, 6);
-          Serial.print("\tLON= ");
-          Serial.print(lon, 6);
-          Serial.println();
-        }
+  // Fica preso até obter um sinal GPS válido
+  while (!validGPS) {
+    int len = Serial1.available();
+    if (len > 0) {  // Lê os dados do GPS
+      uint8_t buffer[128];
+      int xferlen = len;
+      if (len > sizeof(buffer)) xferlen = sizeof(buffer);
+      Serial1.readBytes(buffer, xferlen);
+      ProcessStream(buffer, xferlen);  // Processa os dados lidos
+      if (validGPS == true) {
+        writeTSData(flat, flon);
       }
     }
   }
 
-  if (count > 0) {
-    // Calcula a média das coordenadas
-    float avgLat = sumLat / count;
-    float avgLon = sumLon / count;
 
-    Serial.println("Coleta concluída");
-    Serial.print("Média LAT: ");
-    Serial.print(avgLat, 6);
-    Serial.print("\tMédia LON: ");
-    Serial.println(avgLon, 6);
-
-    // Envia dados para o ThingSpeak
-    writeTSData(avgLat,avgLon);  // Não estamos usando a distância mínima aqui
-  } else {
-    Serial.println("Nenhum dado GPS válido coletado.");
-  }
-}
-
-
-
-
-
-
-void sendData() {
-  
-  searchLoc();
-  
-  interval = readTSData(1);
-  Serial.print("interval: ");
-  Serial.println(interval);
-}
-
-
-void setup() {
-  Serial.begin(9600);
-  gpsSerial.begin(GPS_Serial_Baud);
-  pinMode(ledPin, OUTPUT);
-  setupGSM();
-  batteryMonitor.begin(); 
-  startMillis = millis();  //initial start time
+  validGPS = false;
 }
 
 
 void loop() {
-  
-  if (isGSMConnected()) {
-
   currentMillis = millis();
-  if (currentMillis - startMillis >= interval) {
-    // setupGSM(); // Configura o GSM
-    Serial.println(startMillis);
-    // Verifica se a conexão GSM foi estabelecida
-    if (isGSMConnected()) {
-     
-     writeTSData(-26.97244052040394, -48.63424548179478);
 
-    //  sendData();
-    //  disconnectGSM();
-    } else {
-      Serial.println("Erro: Timeout de conexão GSM");
+  if (startMillis == 0 || currentMillis - startMillis >= 15000) {
+
+    while (!isGSMConnected()) {
+      setupGSM();
     }
+    pinMode(ledPin, OUTPUT);
+    gsmAccess.lowPowerMode();
+    Serial.println("GSM conectado. Tentando enviar dados...");
+    sendData();
+
     startMillis = currentMillis;
-  }}
-  else{
-    Serial.println("GSM DESCONNECTED");
-    setupGSM();
+
+    Serial.println("Colocando GSM em repouso...");
+    pinMode(ledPin, INPUT);
   }
 }
