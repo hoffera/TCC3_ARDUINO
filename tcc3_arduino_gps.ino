@@ -10,7 +10,7 @@
 GSM gsmAccess;
 GPRS gprs;
 GSMClient client;
-HardwareSerial& gpsSerial = Serial2;
+
 const char apn[] = "kore.br";
 const char gsmPin[] = "3636";
 const char GPRS_LOGIN[] = "kore";
@@ -20,17 +20,12 @@ const char* server = "api.thingspeak.com";
 const int port = 80;
 
 float flat, flon;
-const float MAX_DISTANCE = 1.0e6;  // Valor alto para distância "infinita"
-const int ledPin = 6;
-unsigned long startMillis;  //some global variables available anywhere in the program
-unsigned long currentMillis;
-unsigned long previousMillis = 0;  // Para armazenar o último tempo que a função 'send()' foi chamada
-int interval = 10000;             // Intervalo de 10 segundos
+
+int interval = 10000;  // Intervalo de 10 segundos
 bool validGPS = false;
 //*LIB GPS***
 #define FIELD_MAX 20
-#define HIGH_QUALITY_TIME 5000  // 5 segundos para gpsQuality > 1
-#define LOW_QUALITY_TIME 1000   // 1 segundo para gpsQuality > 0
+
 
 void ProcessNMEALine(char* s) {
   char* field[FIELD_MAX];
@@ -68,7 +63,7 @@ void ProcessNMEALine(char* s) {
       Serial.print("Qualidade do GPS: ");
       Serial.println(gpsQuality);
 
-      if (gpsQuality >= 1 && gpsQuality <= 6) {
+      if (gpsQuality > 1 && gpsQuality <= 6) {
         Serial.print("validgps:");
         Serial.println(validGPS);
         validGPS = true;
@@ -141,7 +136,7 @@ void setup() {
   Serial.begin(9600);
   Serial1.begin(38400);  // Inicia a comunicação serial com o módulo GPS a 38400 bps
   batteryMonitor.begin();
-  startMillis = millis();  // Tempo inicial
+  setupGSM();
 }
 
 void setupGSM() {
@@ -160,8 +155,8 @@ void setupGSM() {
   }
 }
 
-float readTSData() {
-  float data;
+int readTSData() {
+  int data;
   Serial.println("Recebendo atualização do app...");
   data = ThingSpeak.readFloatField(2677228, 1, "DI4XDFM9FPB5D3CE");
   return data;
@@ -188,20 +183,7 @@ bool isGSMConnected() {
   return gsmAccess.status() == GSM_READY;
 }
 
-void disconnectGSM() {
-  gsmAccess.shutdown();
-  Serial.println("Conexão GSM terminada.");
-  if (gprs.detachGPRS() == GPRS_READY) {
-    Serial.println("GPRS desconectado.");
-  } else {
-    Serial.println("Falha ao desconectar GPRS.");
-  }
-}
-
 void sendData() {
-
- 
-
   while (!validGPS) {
     int len = Serial1.available();
     if (len > 0) {  // Lê os dados do GPS
@@ -215,35 +197,31 @@ void sendData() {
       }
     }
   }
-
-
   validGPS = false;
-  gsmAccess.lowPowerMode();
-  
+ 
 }
 
-
-
-
 void loop() {
-    Serial.println("...");
-     digitalWrite(LED_BUILTIN, HIGH);
-    // Configura e garante a conexão GSM
-    
-    while (!isGSMConnected()) {
-        setupGSM();
-    }
-    interval = readTSData();
-    gsmAccess.noLowPowerMode();
-    Serial.println("GSM conectado. Tentando enviar dados...");
-   // sendData();
+  Serial.println("...");
+  digitalWrite(LED_BUILTIN, HIGH);
+  // Configura e garante a conexão GSM
+  gsmAccess.noLowPowerMode();// GSM POTENCIA MAX
+  while (!isGSMConnected()) {
+    setupGSM();
+    gsmAccess.noLowPowerMode();// GSM POTENCIA MAX
+  }
+  
+  interval = readTSData();
+  Serial.println("GSM conectado. Tentando enviar dados...");
+  sendData();
+  gsmAccess.lowPowerMode();// GSM POTENCIA MIN
 
-   
-    Serial.print("interval:");
-    Serial.println(interval);
 
-    LowPower.sleep(interval + 4000);
-    
-    // Adicionando um pequeno delay
-    delay(1000); // espera 1 segundo antes de continuar
+  Serial.print("interval:");
+  Serial.println(interval);
+
+  LowPower.sleep(14000);
+
+  // Adicionando um pequeno delay
+  delay(1000);  // espera 1 segundo antes de continuar
 }
