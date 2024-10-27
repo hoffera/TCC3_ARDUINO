@@ -5,6 +5,7 @@
 #include <cmath>
 #define M_PI 3.14159265358979323846
 #include "BatteryMonitor.h"
+#include "ArduinoLowPower.h"
 
 GSM gsmAccess;
 GPRS gprs;
@@ -24,7 +25,7 @@ const int ledPin = 6;
 unsigned long startMillis;  //some global variables available anywhere in the program
 unsigned long currentMillis;
 unsigned long previousMillis = 0;  // Para armazenar o último tempo que a função 'send()' foi chamada
-long interval = 10000;             // Intervalo de 10 segundos
+int interval = 10000;             // Intervalo de 10 segundos
 bool validGPS = false;
 //*LIB GPS***
 #define FIELD_MAX 20
@@ -67,7 +68,7 @@ void ProcessNMEALine(char* s) {
       Serial.print("Qualidade do GPS: ");
       Serial.println(gpsQuality);
 
-      if (gpsQuality > 1 && gpsQuality < 5) {
+      if (gpsQuality >= 1 && gpsQuality <= 6) {
         Serial.print("validgps:");
         Serial.println(validGPS);
         validGPS = true;
@@ -138,7 +139,6 @@ BatteryMonitor batteryMonitor(330000, 1000000, 4.2, 3.5, 2.1);
 
 void setup() {
   Serial.begin(9600);
-  setupGSM();
   Serial1.begin(38400);  // Inicia a comunicação serial com o módulo GPS a 38400 bps
   batteryMonitor.begin();
   startMillis = millis();  // Tempo inicial
@@ -160,10 +160,10 @@ void setupGSM() {
   }
 }
 
-float readTSData(int field) {
+float readTSData() {
   float data;
   Serial.println("Recebendo atualização do app...");
-  data = ThingSpeak.readFloatField(2677228, field, "DI4XDFM9FPB5D3CE");
+  data = ThingSpeak.readFloatField(2677228, 1, "DI4XDFM9FPB5D3CE");
   return data;
 }
 
@@ -200,8 +200,8 @@ void disconnectGSM() {
 
 void sendData() {
 
+ 
 
-  // Fica preso até obter um sinal GPS válido
   while (!validGPS) {
     int len = Serial1.available();
     if (len > 0) {  // Lê os dados do GPS
@@ -218,25 +218,32 @@ void sendData() {
 
 
   validGPS = false;
+  gsmAccess.lowPowerMode();
+  
 }
 
 
+
+
 void loop() {
-  currentMillis = millis();
-
-  if (startMillis == 0 || currentMillis - startMillis >= 15000) {
-
+    Serial.println("...");
+     digitalWrite(LED_BUILTIN, HIGH);
+    // Configura e garante a conexão GSM
+    
     while (!isGSMConnected()) {
-      setupGSM();
+        setupGSM();
     }
-    pinMode(ledPin, OUTPUT);
-    gsmAccess.lowPowerMode();
+    interval = readTSData();
+    gsmAccess.noLowPowerMode();
     Serial.println("GSM conectado. Tentando enviar dados...");
-    sendData();
+   // sendData();
 
-    startMillis = currentMillis;
+   
+    Serial.print("interval:");
+    Serial.println(interval);
 
-    Serial.println("Colocando GSM em repouso...");
-    pinMode(ledPin, INPUT);
-  }
+    LowPower.sleep(interval + 4000);
+    
+    // Adicionando um pequeno delay
+    delay(1000); // espera 1 segundo antes de continuar
 }
