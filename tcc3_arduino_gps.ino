@@ -132,12 +132,7 @@ void ProcessStream(uint8_t* Buffer, int Size) {
 BatteryMonitor batteryMonitor(330000, 1000000, 4.2, 3.5, 2.1);
 //***BATERIA**
 
-void setup() {
-  Serial.begin(9600);
-  Serial1.begin(38400);  // Inicia a comunicação serial com o módulo GPS a 38400 bps
-  batteryMonitor.begin();
-  setupGSM();
-}
+
 
 void setupGSM() {
   Serial.println("Tentando conectar ao GSM...");
@@ -198,7 +193,13 @@ void sendData() {
     }
   }
   validGPS = false;
- 
+}
+
+void setup() {
+  Serial.begin(9600);
+  Serial1.begin(38400);  // Inicia a comunicação serial com o módulo GPS a 38400 bps
+  batteryMonitor.begin();
+  setupGSM();
 }
 
 void loop() {
@@ -208,19 +209,23 @@ void loop() {
   gsmAccess.noLowPowerMode();// GSM POTENCIA MAX
   while (!isGSMConnected()) {
     setupGSM();
-    gsmAccess.noLowPowerMode();// GSM POTENCIA MAX
+    gsmAccess.noLowPowerMode();  // GSM POTENCIA MAX
   }
-  
+
   interval = readTSData();
   Serial.println("GSM conectado. Tentando enviar dados...");
   sendData();
-  gsmAccess.lowPowerMode();// GSM POTENCIA MIN
+  gsmAccess.lowPowerMode();  // GSM POTENCIA MIN
 
 
   Serial.print("interval:");
   Serial.println(interval);
+  if (interval == 10000) {
+    LowPower.sleep(14000);
+  } else {
+    LowPower.sleep(299000);
+  }
 
-  LowPower.sleep(14000);
 
   // Adicionando um pequeno delay
   delay(1000);  // espera 1 segundo antes de continuar
