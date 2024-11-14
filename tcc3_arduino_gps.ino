@@ -26,6 +26,8 @@ bool validGPS = false;
 //*LIB GPS***
 #define FIELD_MAX 20
 
+unsigned long inicio;
+unsigned long final = 30000;  // TEMPO LIMITE
 
 void ProcessNMEALine(char* s) {
   char* field[FIELD_MAX];
@@ -63,12 +65,10 @@ void ProcessNMEALine(char* s) {
       Serial.print("Qualidade do GPS: ");
       Serial.println(gpsQuality);
 
-      if (gpsQuality > 1 && gpsQuality <= 6) {
-        Serial.print("validgps:");
-        Serial.println(validGPS);
+      if (gpsQuality >= 1 && gpsQuality <= 6) {
+
         validGPS = true;
-        Serial.print("validgps:");
-        Serial.println(validGPS);
+
 
         // Latitude e hemisfério
         lat = atof(field[2]);
@@ -151,10 +151,13 @@ void setupGSM() {
 }
 
 int readTSData() {
-  int data;
-  Serial.println("Recebendo atualização do app...");
-  data = ThingSpeak.readFloatField(2677228, 1, "DI4XDFM9FPB5D3CE");
-  return data;
+  if (millis() - inicio < final) {
+    int data;
+    Serial.println("Recebendo atualização do app...");
+
+    data = ThingSpeak.readFloatField(2677228, 1, "DI4XDFM9FPB5D3CE");
+    return data;
+  } else return interval;
 }
 
 void writeTSData(float data1, float data2) {
@@ -174,12 +177,17 @@ void writeTSData(float data1, float data2) {
   }
 }
 
+
+
 bool isGSMConnected() {
   return gsmAccess.status() == GSM_READY;
 }
 
 void sendData() {
-  while (!validGPS) {
+
+
+  while (validGPS == false && millis() - inicio < final) {
+
     int len = Serial1.available();
     if (len > 0) {  // Lê os dados do GPS
       uint8_t buffer[128];
@@ -192,8 +200,10 @@ void sendData() {
       }
     }
   }
+
   validGPS = false;
 }
+
 
 void setup() {
   Serial.begin(9600);
@@ -202,28 +212,42 @@ void setup() {
   setupGSM();
 }
 
+bool func = false;
+
 void loop() {
-  Serial.println("...");
-  digitalWrite(LED_BUILTIN, HIGH);
+
   // Configura e garante a conexão GSM
-  gsmAccess.noLowPowerMode();// GSM POTENCIA MAX
+  Serial.println("Verificando GSM ...");
   while (!isGSMConnected()) {
+    Serial.println("SEM GSM ...");
     setupGSM();
-    gsmAccess.noLowPowerMode();  // GSM POTENCIA MAX
   }
 
-  interval = readTSData();
+  
+
   Serial.println("GSM conectado. Tentando enviar dados...");
-  sendData();
-  gsmAccess.lowPowerMode();  // GSM POTENCIA MIN
 
-
-  Serial.print("interval:");
+  bool func = false;
+  inicio = millis();  // Registra o tempo inicial
+ 
+  while ((func == false && millis() - inicio < final) && isGSMConnected() == true) {  // Roda por 30 segundos
+    Serial.println("..............................");
+    sendData();
+    interval = readTSData();
+    func = true;
+  }
+  Serial.print("INTERVAL:");
   Serial.println(interval);
+  Serial.println("Dados Enviados");
+
   if (interval == 10000) {
-    LowPower.sleep(14000);
+    // LowPower.sleep(14000);
+    Serial.println("15 segundos");
+    delay(14000);
   } else {
-    LowPower.sleep(299000);
+    // LowPower.sleep(299000);
+    Serial.println("5 minutos");
+   delay(299000);
   }
 
 
